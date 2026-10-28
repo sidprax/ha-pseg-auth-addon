@@ -40,6 +40,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract add-on version
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pseg_auth/config.yaml | awk '{print $2}' | tr -d '"')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Build and push HA Add-on image
         uses: docker/build-push-action@v6
         with:
@@ -49,7 +55,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/ha-pseg-auth-${{ matrix.arch }}:latest
-            ghcr.io/${{ github.repository_owner }}/ha-pseg-auth-${{ matrix.arch }}:1.0.0
+            ghcr.io/${{ github.repository_owner }}/ha-pseg-auth-${{ matrix.arch }}:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -73,6 +79,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract add-on version
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pseg_auth/config.yaml | awk '{print $2}' | tr -d '"')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Build and push Standalone image
         uses: docker/build-push-action@v6
         with:
@@ -82,6 +94,6 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/ha-pseg-auth:latest
-            ghcr.io/${{ github.repository_owner }}/ha-pseg-auth:1.0.0
+            ghcr.io/${{ github.repository_owner }}/ha-pseg-auth:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
