@@ -146,8 +146,9 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                     time.sleep(3)
                     logger.info("Page loaded. Current URL: %s (Title: %s)", driver.current_url, driver.title)
 
-                    # Check if already authenticated
-                    if "Dashboard" in driver.current_url or ("mysmartenergy.nj.pseg.com" in driver.current_url and "Login" not in driver.current_url and "SignIn" not in driver.current_url):
+                    # Check if already authenticated (only if Dashboard reached and login inputs absent)
+                    email_inputs = driver.find_elements(By.ID, "LoginEmail")
+                    if not email_inputs and "Dashboard" in driver.current_url:
                         logger.info("Already authenticated! Capturing cookies directly.")
                         cookies = driver.get_cookies()
                         cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies if 'pseg.com' in c.get('domain', '')])
@@ -156,7 +157,13 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                         self._send_json(200, {"success": True, "cookies": cookie_str})
                         return
 
-                    email_inputs = driver.find_elements(By.ID, "LoginEmail")
+                    # Wait for login inputs if not immediately available
+                    for _ in range(10):
+                        if email_inputs and driver.find_elements(By.ID, "LoginPassword"):
+                            break
+                        time.sleep(1)
+                        email_inputs = driver.find_elements(By.ID, "LoginEmail")
+
                     pass_inputs = driver.find_elements(By.ID, "LoginPassword")
                     if not email_inputs or not pass_inputs:
                         raise Exception("MyMeter login inputs (#LoginEmail, #LoginPassword) not found on page")
@@ -181,19 +188,23 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                     login_btn = driver.find_elements(By.CSS_SELECTOR, ".loginBtn")
                     if login_btn:
                         login_btn[0].click()
-                    time.sleep(4)
+                    time.sleep(3)
 
                     solve_recaptcha_if_present(driver)
 
-                    # Wait up to 15 seconds for dashboard navigation
-                    for _ in range(15):
-                        if "Dashboard" in driver.current_url or ("mysmartenergy.nj.pseg.com" in driver.current_url and "Login" not in driver.current_url and "SignIn" not in driver.current_url):
+                    # Wait up to 25 seconds for dashboard navigation
+                    for _ in range(25):
+                        if "Dashboard" in driver.current_url:
                             break
+                        solve_recaptcha_if_present(driver)
+                        error_els = driver.find_elements(By.CSS_SELECTOR, ".error, [data-valmsg-for='LoginErrorMessage']")
+                        if error_els and error_els[0].text.strip():
+                            raise Exception(f"MyMeter login error: {error_els[0].text.strip()}")
                         time.sleep(1)
 
                     cookies = driver.get_cookies()
                     cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies if 'pseg.com' in c.get('domain', '')])
-                    if "MM_SID" in cookie_str:
+                    if "Dashboard" in driver.current_url and "MM_SID" in cookie_str:
                         logger.info("MyMeter direct login successful! Cookies captured.")
                         driver.quit()
                         active_driver = None
@@ -201,7 +212,7 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                         return
 
                     error_els = driver.find_elements(By.CSS_SELECTOR, ".error, [data-valmsg-for='LoginErrorMessage']")
-                    err_text = error_els[0].text if error_els and error_els[0].text else "MyMeter direct login failed"
+                    err_text = error_els[0].text if error_els and error_els[0].text else "MyMeter direct login failed to reach Dashboard"
                     raise Exception(err_text)
 
                 # Standard PSE&G Okta SSO flow
