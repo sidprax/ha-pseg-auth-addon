@@ -4,7 +4,10 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import speech_recognition as sr
@@ -21,6 +24,66 @@ PROFILE_DIR = os.environ.get("PSEG_PROFILE_DIR", "/data/browser_data")
 PORT = int(os.environ.get("PORT", 8000))
 
 active_driver = None
+
+ALLOWED_RECAPTCHA_HOSTS = {
+    "www.google.com",
+    "google.com",
+    "www.recaptcha.net",
+    "recaptcha.net",
+}
+
+
+def is_safe_recaptcha_url(url: str) -> bool:
+    """Ensure URL is HTTPS and points to an authorized Google reCAPTCHA host."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        if parsed.scheme.lower() != "https":
+            return False
+        hostname = (parsed.hostname or "").lower()
+        return hostname in ALLOWED_RECAPTCHA_HOSTS
+    except Exception:
+        return False
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Ensure HTTP redirects stay strictly within authorized reCAPTCHA hostnames and HTTPS."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_safe_recaptcha_url(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, f"Disallowed redirect to untrusted target: {newurl}", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def download_recaptcha_audio(src: str, dest_path: str, max_bytes: int = 5 * 1024 * 1024) -> None:
+    """Download audio challenge verifying every URL and redirect against SSRF rules."""
+    if not is_safe_recaptcha_url(src):
+        raise ValueError("audio-source src is missing or untrusted")
+
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    req = urllib.request.Request(
+        src,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+    )
+    with opener.open(req, timeout=15) as resp:
+        final_url = resp.geturl()
+        if not is_safe_recaptcha_url(final_url):
+            raise ValueError(f"Final redirect URL untrusted: {final_url}")
+
+        downloaded = 0
+        with open(dest_path, "wb") as out_f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    raise ValueError("Audio challenge payload exceeded size limit")
+                out_f.write(chunk)
+
 
 def solve_recaptcha_if_present(driver):
     time.sleep(2)
@@ -45,23 +108,40 @@ def solve_recaptcha_if_present(driver):
             raise Exception("recaptcha_blocked: Unable to locate audio-source (challenge throttled by Google)")
 
         src = audio_sources[0].get_attribute('src')
-        if not src:
-            raise Exception("recaptcha_blocked: audio-source src is empty")
+        if not src or not is_safe_recaptcha_url(src):
+            raise Exception("recaptcha_blocked: audio-source src is missing or untrusted")
 
-        urllib.request.urlretrieve(src, '/tmp/recaptcha.mp3')
-        subprocess.run(['ffmpeg', '-y', '-i', '/tmp/recaptcha.mp3', '/tmp/recaptcha.wav'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        r = sr.Recognizer()
-        with sr.AudioFile('/tmp/recaptcha.wav') as source:
-            audio = r.record(source)
-        text = r.recognize_google(audio)
-        logger.info("Audio transcribed: '%s'", text)
-        
-        inp = driver.find_element(By.ID, 'audio-response')
-        inp.send_keys(text)
-        time.sleep(1)
-        driver.find_element(By.ID, 'recaptcha-verify-button').click()
-        time.sleep(3)
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_tmp:
+            mp3_path = mp3_tmp.name
+        wav_path = mp3_path.replace(".mp3", ".wav")
+
+        try:
+            download_recaptcha_audio(src, mp3_path)
+            subprocess.run(
+                ['ffmpeg', '-y', '-i', mp3_path, wav_path],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            r = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio = r.record(source)
+            text = r.recognize_google(audio)
+            logger.info("Audio transcribed successfully")
+
+            inp = driver.find_element(By.ID, 'audio-response')
+            inp.send_keys(text)
+            time.sleep(1)
+            driver.find_element(By.ID, 'recaptcha-verify-button').click()
+            time.sleep(3)
+        finally:
+            for temp_f in (mp3_path, wav_path):
+                if temp_f and os.path.exists(temp_f):
+                    try:
+                        os.remove(temp_f)
+                    except OSError:
+                        pass
     finally:
         driver.switch_to.default_content()
 
@@ -110,8 +190,18 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global active_driver
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length).decode('utf-8')
+        content_len_hdr = self.headers.get('Content-Length')
+        try:
+            length = int(content_len_hdr) if content_len_hdr else 0
+        except ValueError:
+            self._send_json(400, {"error": "Invalid Content-Length header"})
+            return
+
+        if length < 0 or length > 65536:
+            self._send_json(413, {"error": "Payload exceeds maximum allowed size of 64KB"})
+            return
+
+        body = self.rfile.read(length).decode('utf-8', errors='replace')
         try:
             data = json.loads(body) if body else {}
         except Exception:
@@ -336,11 +426,7 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
                     active_driver = None
-                try:
-                    shutil.rmtree(PROFILE_DIR, ignore_errors=True)
-                    logger.info("Cleared browser profile after login failure")
-                except Exception:
-                    pass
+                logger.debug("Active driver closed after login failure")
                 status_code = 403 if "recaptcha_blocked" in err_msg else 500
                 self._send_json(status_code, {
                     "error": err_msg,
@@ -371,7 +457,7 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                     raise Exception("Visible OTP input field not found on page")
 
                 target_input = passcode_inputs[0]
-                logger.info("Entering code %s into visible OTP input...", code)
+                logger.info("Entering OTP verification code into visible input...")
                 driver.execute_script("arguments[0].scrollIntoView(true);", target_input)
                 time.sleep(0.5)
                 try:
