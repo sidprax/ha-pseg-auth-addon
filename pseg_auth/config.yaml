@@ -1,5 +1,5 @@
 name: "PSE&G Auth Companion"
-version: "1.1.1"
+version: "1.1.2"
 slug: "pseg_auth"
 description: "Automated sign-in companion service for the Home Assistant PSE&G integration."
 url: "https://github.com/sidprax/ha-pseg-auth-addon"
