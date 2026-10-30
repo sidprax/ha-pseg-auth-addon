@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -46,6 +47,44 @@ def is_safe_recaptcha_url(url: str) -> bool:
         return False
 
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Ensure HTTP redirects stay strictly within authorized reCAPTCHA hostnames and HTTPS."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_safe_recaptcha_url(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, f"Disallowed redirect to untrusted target: {newurl}", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def download_recaptcha_audio(src: str, dest_path: str, max_bytes: int = 5 * 1024 * 1024) -> None:
+    """Download audio challenge verifying every URL and redirect against SSRF rules."""
+    if not is_safe_recaptcha_url(src):
+        raise ValueError("audio-source src is missing or untrusted")
+
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    req = urllib.request.Request(
+        src,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+    )
+    with opener.open(req, timeout=15) as resp:
+        final_url = resp.geturl()
+        if not is_safe_recaptcha_url(final_url):
+            raise ValueError(f"Final redirect URL untrusted: {final_url}")
+
+        downloaded = 0
+        with open(dest_path, "wb") as out_f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    raise ValueError("Audio challenge payload exceeded size limit")
+                out_f.write(chunk)
+
+
 def solve_recaptcha_if_present(driver):
     time.sleep(2)
     bframes = [f for f in driver.find_elements(By.TAG_NAME, 'iframe') if 'bframe' in (f.get_attribute('src') or '')]
@@ -77,7 +116,7 @@ def solve_recaptcha_if_present(driver):
         wav_path = mp3_path.replace(".mp3", ".wav")
 
         try:
-            urllib.request.urlretrieve(src, mp3_path)
+            download_recaptcha_audio(src, mp3_path)
             subprocess.run(
                 ['ffmpeg', '-y', '-i', mp3_path, wav_path],
                 check=True,

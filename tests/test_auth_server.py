@@ -32,6 +32,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from auth_server import (
     ALLOWED_RECAPTCHA_HOSTS,
     PsegAuthHandler,
+    SafeRedirectHandler,
+    download_recaptcha_audio,
     is_safe_recaptcha_url,
 )
 
@@ -67,6 +69,42 @@ class TestRecaptchaUrlValidation(unittest.TestCase):
         self.assertFalse(is_safe_recaptcha_url("   "))
         self.assertFalse(is_safe_recaptcha_url("not-a-url"))
         self.assertFalse(is_safe_recaptcha_url(12345))
+
+
+class TestSafeRedirectHandler(unittest.TestCase):
+    """Test that HTTP redirects to untrusted destinations are rejected."""
+
+    def setUp(self):
+        self.handler = SafeRedirectHandler()
+
+    def test_safe_redirect_allowed(self):
+        req = MagicMock()
+        headers = {}
+        safe_url = "https://www.google.com/recaptcha/api2/payload?k=123"
+        with patch("urllib.request.HTTPRedirectHandler.redirect_request") as mock_super:
+            mock_super.return_value = "safe_req"
+            res = self.handler.redirect_request(req, None, 302, "Found", headers, safe_url)
+            self.assertEqual(res, "safe_req")
+
+    def test_unsafe_redirect_raises_http_error(self):
+        import urllib.error
+        req = MagicMock()
+        headers = {}
+        unsafe_url = "http://169.254.169.254/latest/meta-data"
+        with self.assertRaises(urllib.error.HTTPError):
+            self.handler.redirect_request(req, None, 302, "Found", headers, unsafe_url)
+
+    def test_redirect_to_different_untrusted_host_rejected(self):
+        import urllib.error
+        req = MagicMock()
+        headers = {}
+        unsafe_url = "https://attacker.com/steal"
+        with self.assertRaises(urllib.error.HTTPError):
+            self.handler.redirect_request(req, None, 302, "Found", headers, unsafe_url)
+
+    def test_download_audio_untrusted_source_rejected(self):
+        with self.assertRaises(ValueError):
+            download_recaptcha_audio("http://evil.com/audio.mp3", "/tmp/test.mp3")
 
 
 class TestAuthServerHttpHandlers(unittest.TestCase):

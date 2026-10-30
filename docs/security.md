@@ -13,10 +13,12 @@ The companion service provides automated authentication against the PSE&G and My
    - External filesystem mounts (`homeassistant_config`, `share`) are removed from the add-on manifest.
    - The service only stores transient browser session state within `/data/browser_data`.
 
-2. **reCAPTCHA Audio URL Verification (SSRF Prevention)**:
+2. **reCAPTCHA Audio URL & Redirect Verification (SSRF Prevention)**:
    - Audio challenge URLs extracted from the reCAPTCHA iframe are strictly validated before download.
    - Schemes must be `https://`.
    - Hostnames must match trusted Google domains (`www.google.com`, `google.com`, `www.recaptcha.net`, `recaptcha.net`).
+   - Every HTTP redirect hop (301/302/307) is re-validated through `SafeRedirectHandler`, preventing redirect-based SSRF bypasses.
+   - Total payload size is limited to 5 MB with a 15-second timeout.
    - Local file schemes (`file://`), unencrypted HTTP (`http://`), and arbitrary IP addresses are rejected.
 
 3. **Safe Temporary File Handling**:
