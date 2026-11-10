@@ -8,6 +8,9 @@ Supports two automated modes:
 - **Direct MyMeter Account (Recommended)**: Logs into `mysmartenergy.nj.pseg.com` directly using an invited secondary user. Zero 2FA/SMS code required.
 - **Primary PSE&G Account**: Navigates Okta SSO with automated reCAPTCHA solving and one-time verification passcodes (SMS/Email OTP).
 
+> [!NOTE]
+> While this repository is named `ha-pseg-auth-addon` for compatibility with existing installations, the companion service is designed to support any public MyMeter platform instance. If you use a utility powered by MyMeter outside of New Jersey and are interested in testing automated sign-in, please [open an issue](https://github.com/sidprax/ha-pseg/issues) or comment on [#2](https://github.com/sidprax/ha-pseg/issues/2).
+
 ## Add-ons in this Repository
 
 ### [PSE&G Auth Companion](pseg_auth/)
