@@ -352,6 +352,7 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                 time.sleep(1)
                 pass_inputs[0].send_keys(Keys.ENTER)
                 time.sleep(6)
+                solve_recaptcha_if_present(driver)
 
                 # Check if redirected directly
                 if "mysmartenergy.nj.pseg.com" in driver.current_url and "SignIn" not in driver.current_url:
@@ -375,37 +376,47 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                         return
 
                     if mfa_method == 'email':
-                        if email_btns:
-                            logger.info("Selecting Email MFA...")
-                            email_btns[0].click()
-                            time.sleep(4)
+                        if not email_btns:
+                            raise Exception("Email MFA button not found on Okta challenge page")
+                        logger.info("Selecting Email MFA...")
+                        email_btns[0].click()
+                        time.sleep(4)
                         send_email_btns = driver.find_elements(
                             By.CSS_SELECTOR,
                             "input[value*='Send'], input[value*='send'], button[data-type='save'], button[type='submit'], input[type='submit'], a[aria-label*='Send']"
                         )
-                        if send_email_btns:
-                            logger.info("Clicking Send Email button...")
-                            send_email_btns[0].click()
-                            time.sleep(4)
+                        if not send_email_btns:
+                            raise Exception("Send Email button not found on Okta MFA page")
+                        logger.info("Clicking Send Email button...")
+                        send_email_btns[0].click()
+                        time.sleep(4)
                     elif phone_btns:
                         logger.info("Selecting Phone MFA...")
                         phone_btns[0].click()
                         time.sleep(4)
                         sms_btns = driver.find_elements(By.CSS_SELECTOR, "a[aria-label*='SMS'], button[aria-label*='SMS'], input[value*='SMS']")
-                        if sms_btns:
-                            sms_btns[0].click()
-                            time.sleep(4)
+                        if not sms_btns:
+                            raise Exception("Send SMS button not found on Okta MFA page")
+                        sms_btns[0].click()
+                        time.sleep(4)
+                    else:
+                        raise Exception("Requested MFA method button not found on Okta challenge page")
 
                     logger.info("MFA dispatched! Waiting for code...")
                     self._send_json(200, {"success": False, "mfa_required": True, "dispatched": True})
                     return
 
-                # Check if already on passcode prompt
+                # Check if already on passcode prompt (exclude password input fields)
                 passcode_candidates = driver.find_elements(
                     By.CSS_SELECTOR,
                     "input[name='credentials.passcode'], input[type='tel'], input[name='passcode'], input[name='answer'], input[autocomplete='one-time-code']"
                 )
-                passcode_inputs = [inp for inp in passcode_candidates if inp.is_displayed() and inp.is_enabled()]
+                passcode_inputs = [
+                    inp for inp in passcode_candidates
+                    if inp.is_displayed()
+                    and inp.is_enabled()
+                    and (inp.get_attribute("type") or "").lower() != "password"
+                ]
                 if passcode_inputs:
                     if not dispatch_mfa:
                         logger.info("MFA challenge active, but dispatch_mfa=False. Closing session without dispatch.")
