@@ -12,7 +12,11 @@ import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import speech_recognition as sr
 from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException
+try:
+    from selenium.common.exceptions import StaleElementReferenceException
+except ImportError:
+    class StaleElementReferenceException(Exception):
+        pass
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
