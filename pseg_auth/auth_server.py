@@ -12,6 +12,7 @@ import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import speech_recognition as sr
 from selenium import webdriver
+from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
@@ -286,10 +287,14 @@ class PsegAuthHandler(BaseHTTPRequestHandler):
                     for _ in range(25):
                         if "Dashboard" in driver.current_url:
                             break
-                        solve_recaptcha_if_present(driver)
-                        error_els = driver.find_elements(By.CSS_SELECTOR, ".error, [data-valmsg-for='LoginErrorMessage']")
-                        if error_els and error_els[0].text.strip():
-                            raise Exception(f"MyMeter login error: {error_els[0].text.strip()}")
+                        try:
+                            solve_recaptcha_if_present(driver)
+                            error_els = driver.find_elements(By.CSS_SELECTOR, ".error, [data-valmsg-for='LoginErrorMessage']")
+                            if error_els and error_els[0].text.strip():
+                                raise Exception(f"MyMeter login error: {error_els[0].text.strip()}")
+                        except StaleElementReferenceException:
+                            if "Dashboard" in driver.current_url:
+                                break
                         time.sleep(1)
 
                     cookies = driver.get_cookies()
